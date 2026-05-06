@@ -824,7 +824,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max-depth-jump", type=float, default=0.08)
     p.add_argument("--relative-depth-jump", type=float, default=0.08)
     p.add_argument("--max-geometry-depth", type=float, default=100.0)
-    p.add_argument("--background-percentile", type=float, default=0.98)
+    p.add_argument("--background-percentile", type=float, default=0.995)
 
     # MVInverse.
     p.add_argument("--mvi-ckpt", type=str, default="maddog241/mvinverse")

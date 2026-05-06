@@ -20,6 +20,9 @@ asset/background/
 outputs/
 work/
 logs/
+background/
+depth_mesh/
+depth_pcd/
 checkpoints/
 downloads/
 incoming/

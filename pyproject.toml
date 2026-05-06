@@ -1,0 +1,97 @@
+[project]
+name = "stage12-run-remote"
+version = "0.1.0"
+description = "Remote production environment for Stage 1 scene reconstruction + Stage 2 Mitsuba processing"
+readme = "README.md"
+requires-python = ">=3.10,<3.11"
+dependencies = [
+    # ─────────────────────────────────────────────────────────────
+    # Core CUDA / PyTorch stack
+    # RunPod target: Linux + CUDA 12.4 PyTorch wheels
+    # ─────────────────────────────────────────────────────────────
+    "torch==2.5.1",
+    "torchvision==0.20.1",
+    "torchaudio==2.5.1",
+
+    # ─────────────────────────────────────────────────────────────
+    # Numeric / image / geometry base
+    # Keep NumPy 1.x for maximum compatibility with older geometry / CV code.
+    # If you later confirm every dependency is NumPy-2 safe, this can be relaxed.
+    # ─────────────────────────────────────────────────────────────
+    "numpy>=1.26.0,<2.0",
+    "scipy>=1.13.0",
+    "pandas>=2.2.0",
+    "pillow>=10.3.0",
+    "imageio>=2.37.3",
+    "matplotlib>=3.10.0",
+    "opencv-python>=4.9.0",
+    "scikit-image>=0.22.0",
+    "scikit-learn>=1.4.0",
+
+    # ─────────────────────────────────────────────────────────────
+    # 3D / mesh / rendering
+    # ─────────────────────────────────────────────────────────────
+    "open3d>=0.19.0",
+    "trimesh>=4.12.1",
+    "pyglet>=2.0.0",
+    "xatlas>=0.0.11",
+    "mitsuba>=3.8.0",
+
+    # ─────────────────────────────────────────────────────────────
+    # PixelPerfect / MoGe / reconstruction support
+    # ─────────────────────────────────────────────────────────────
+    "omegaconf>=2.3.0",
+    "timm==0.9.1",
+
+    # ─────────────────────────────────────────────────────────────
+    # Intrinsic / diffusion / Hugging Face stack
+    # Stage 2 had exact pins for diffusers / peft / transformers.
+    # Keep them exact for reproducibility.
+    # ─────────────────────────────────────────────────────────────
+    "diffusers==0.33.1",
+    "transformers==4.44.2",
+    "peft==0.15.2",
+    "accelerate>=0.30.0",
+    "datasets>=2.19.0",
+    "huggingface-hub>=0.30.0",
+    "safetensors>=0.4.3",
+    "tokenizers>=0.19.0,<0.20.0",
+    "sentencepiece>=0.2.1",
+    "protobuf==3.19.0",
+
+    # ─────────────────────────────────────────────────────────────
+    # Metrics / logging / utilities
+    # ─────────────────────────────────────────────────────────────
+    "lpips>=0.1.4",
+    "pyyaml>=6.0.1",
+    "tqdm>=4.67.3",
+    "requests>=2.31.0",
+    "gradio-client>=1.0.0",
+    "packaging>=24.0",
+    "pydantic>=2.7.0",
+    "typing-extensions>=4.11.0",
+    "wandb>=0.17.0",
+    "gitpython>=3.1.43",
+    "h5py>=3.11.0",
+
+    # ─────────────────────────────────────────────────────────────
+    # Git source dependency used by Stage 1
+    # ─────────────────────────────────────────────────────────────
+    "utils3d",
+]
+
+[tool.uv]
+package = false
+
+# PyTorch CUDA 12.4 wheels.
+# RunPod images commonly provide recent NVIDIA drivers, so CUDA 12.4 wheels are a safe baseline.
+[tool.uv.sources]
+torch = { index = "pytorch-cu124" }
+torchvision = { index = "pytorch-cu124" }
+torchaudio = { index = "pytorch-cu124" }
+utils3d = { git = "https://github.com/EasternJournalist/utils3d.git", rev = "c5daf6f6c244d251f252102d09e9b7bcef791a38" }
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true

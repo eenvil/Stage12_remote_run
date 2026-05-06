@@ -1,0 +1,140 @@
+data: 
+  _target_: ppd.data.general_datamodule.GeneralDataModule
+  train_dataset:
+    pretrain: True
+    dataset_opts:
+      - _target_: ppd.data.hypersim.Dataset
+        data_root: /data/Monocular_Data/Hypersim/processed
+        split_path: ppd/datasets/hypersim/metadata_splits_filtered_train.json
+        split: train
+        dataset_name: 'hypersim'
+        transforms:
+          - _target_: ppd.data.transform.Resize
+            width: 512
+            height: 512
+          - _target_: ppd.data.transform.PrepareForNet
+
+  train_loader_opts:
+    batch_size: 4
+  val_dataset:
+    dataset_opts:
+
+      - _target_: ppd.data.nyu.Dataset
+        data_root: /data/Monocular_Data/NYU
+        split: test
+        transforms:
+          - _target_: ppd.data.transform.PrepareForNet
+        split_path: ppd/datasets/nyu/filename_list_test.txt
+
+      - _target_: ppd.data.diode.Dataset
+        data_root: /data/Monocular_Data/DIODE
+        split: test
+        transforms:
+          - _target_: ppd.data.transform.PrepareForNet
+        split_path: ppd/datasets/diode/diode_val_all_filename_list.txt
+
+      - _target_: ppd.data.eth3d.Dataset
+        data_root: /data/Monocular_Data/ETH3D
+        split: test
+        transforms:
+          - _target_: ppd.data.transform.PrepareForNet
+        split_path: ppd/datasets/eth3d/eth3d_filename_list.txt
+
+      - _target_: ppd.data.scannet.Dataset
+        data_root: /data/Monocular_Data/ScanNet
+        split: test
+        transforms:
+          - _target_: ppd.data.transform.PrepareForNet
+        split_path: ppd/datasets/scannet/scannet_val_sampled_list_800_1.txt
+
+      - _target_: ppd.data.kitti.Dataset
+        data_root: /data/Monocular_Data/KITTI
+        split: test
+        transforms:
+          - _target_: ppd.data.transform.PrepareForNet
+        split_path: ppd/datasets/kitti/eigen_test_files_with_gt.txt
+
+model:
+  _target_: ppd.models.depth_estimation_model.DepthEstimationModel
+  output_dir: ${output_dir}/results
+  save_vis_depth: True
+  pipeline:
+    _target_: ppd.models.ppd_train.PixelPerfectDepth
+    config:
+      pretrain: True
+      semantics_model: MoGe2
+      semantics_pth: checkpoints/moge2.pt
+      score_model:
+        _target_: ppd.models.dit.DiT
+        depth: 24
+        hidden_size: 1024
+        patch_size: 8
+        num_heads: 16
+        in_channels: 4
+        out_channels: 1
+        input_size: [768, 1024]
+      diffusion:
+        schedule:
+          type: lerp
+          T: 1000
+        sampler:
+          type: euler
+          prediction_type: v_lerp
+        timesteps:
+          training:
+            type: logitnormal
+            loc: 0.0
+            scale: 1.0
+          sampling:
+            type: uniform
+            steps: 4
+
+  optimizer:
+    _target_: torch.optim.AdamW
+    _partial_: true
+    lr: 1e-4
+    weight_decay: 0.0
+
+  lr_table:
+    _target_: ppd.utils.lr_table.LRTable
+    default_lr: 1e-4
+
+# PyTorch Lightning Callbacks
+callbacks:
+  model_checkpoint:
+    _target_: pytorch_lightning.callbacks.ModelCheckpoint
+    dirpath: ${output_dir}/checkpoints/
+    filename: "e{epoch:03d}-s{step:06d}"
+    monitor: val/relative_abs_rel/dataloader_idx_1
+    mode: min
+    save_top_k: 8
+    auto_insert_metric_name: False  
+    save_weights_only: True  
+    every_n_epochs: 1
+    save_last: True
+
+# Logger Configuration
+logger:
+  _target_: pytorch_lightning.loggers.TensorBoardLogger
+  save_dir: ${output_dir}
+  name: ''
+  version: 'tb'
+
+# PyTorch Lightning Configuration
+pl_trainer:
+  devices: 1
+  num_nodes: 1
+  num_sanity_val_steps: 0
+  max_epochs: 500
+  limit_train_batches: 2000
+  log_every_n_steps: 50
+  strategy: ddp_find_unused_parameters_true
+  precision: bf16-mixed
+
+# Default Configuration
+print_cfg: True
+seed: 666
+exp_name: test
+resume_training: True
+confirm_delete_previous_dir: False
+output_dir: experiments/outputs/${exp_name}

@@ -1,0 +1,45 @@
+# Python / uv
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# datasets
+Dataset/
+dataset/
+data/
+asset/input/
+
+# outputs / generated artifacts
+asset/output/
+asset/materials/
+asset/mesh/
+asset/pointcloud/
+asset/background/
+outputs/
+work/
+logs/
+checkpoints/
+downloads/
+incoming/
+results/
+*.tar
+*.tar.gz
+*.zip
+
+# model weights / caches
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+.cache/
+huggingface/
+hf_cache/
+wandb/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

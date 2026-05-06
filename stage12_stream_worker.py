@@ -6,8 +6,8 @@ Stage12 streaming production worker
 Streaming design:
 
   for each image in downloads/ or extracted tarballs:
-      1. run PixelPerfect/MoGe depth for this one image
-      2. run MVInverse in-process with model loaded once
+      1. run MVInverse in-process with model loaded once
+      2. run PixelPerfect/MoGe in-process with model loaded once
       3. build one temporary Stage-2 package under work/current/<stem>/stage_pkg
       4. run Stage 2 immediately
       5. keep only compact final output
@@ -187,87 +187,253 @@ def ensure_checkpoints(args: argparse.Namespace, repo_root: Path, log_path: Path
 
 
 # ---------------------------------------------------------------------
-# PixelPerfect runner
+# PixelPerfect / MoGe in-process runner
 # ---------------------------------------------------------------------
 
-def run_pixelperfect_for_image(
-    *,
-    repo_root: Path,
-    image: Path,
-    args: argparse.Namespace,
-    log_path: Path,
-) -> dict[str, Path]:
-    """
-    Calls root-level run_point_cloud.py.
+def load_pixelperfect_once(repo_root: Path, args: argparse.Namespace):
+    """Load PixelPerfectDepth and MoGe once, instead of spawning run_point_cloud.py per image."""
+    import torch
+    from ppd.utils.set_seed import set_seed
+    from ppd.moge.model.v2 import MoGeModel
+    from ppd.models.ppd import PixelPerfectDepth
 
-    Temporary root-level outputs created by run_point_cloud.py:
-      depth_mesh/<stem>.ply
-      depth_pcd/<stem>_camera.json
-      background/<stem>_*.png/json
+    set_seed(666)
+    device = torch.device(args.device if torch.cuda.is_available() and str(args.device).startswith("cuda") else "cpu")
 
-    They are copied into work/current/<stem>/stage_pkg and deleted after success.
-    """
-    stem = image.stem
-    script = repo_root / "run_point_cloud.py"
-    if not script.exists():
-        raise FileNotFoundError(f"Missing {script}")
+    ckpt_dir = repo_root / "checkpoints"
+    if args.semantics_model == "MoGe2":
+        semantics_pth = ckpt_dir / "moge2.pt"
+        model_pth = ckpt_dir / "ppd_moge.pth"
+    else:
+        semantics_pth = ckpt_dir / "depth_anything_v2_vitl.pth"
+        model_pth = ckpt_dir / "ppd.pth"
 
-    cmd: list[str | Path] = [
-        sys.executable,
-        script,
-        "--img_path", image,
-        "--outdir", repo_root / "depth_vis",
-        "--semantics_model", args.semantics_model,
-        "--sampling_steps", str(args.sampling_steps),
-        "--save_pcd",
-        "--save_mesh",
-        "--mesh_stride", str(args.mesh_stride),
-        "--max_depth_jump", str(args.max_depth_jump),
-        "--relative_depth_jump", str(args.relative_depth_jump),
-        "--max_geometry_depth", str(args.max_geometry_depth),
-        "--background_percentile", str(args.background_percentile),
-        "--save_background",
-        "--no_depth_vis",
-    ]
+    print(f"[PPD] loading MoGe once from {ckpt_dir / 'moge2.pt'}")
+    moge = MoGeModel.from_pretrained(str(ckpt_dir / "moge2.pt")).to(device).eval()
 
-    run_cmd(cmd, cwd=repo_root, log_path=log_path)
+    print(f"[PPD] loading PixelPerfectDepth once from {model_pth}")
+    ppd_model = PixelPerfectDepth(
+        semantics_model=args.semantics_model,
+        semantics_pth=str(semantics_pth),
+        sampling_steps=args.sampling_steps,
+    )
+    ppd_model.load_state_dict(torch.load(str(model_pth), map_location="cpu"), strict=False)
+    ppd_model = ppd_model.to(device).eval()
 
-    outputs = {
-        "mesh_ply": repo_root / "depth_mesh" / f"{stem}.ply",
-        "camera": repo_root / "depth_pcd" / f"{stem}_camera.json",
-        "pcd": repo_root / "depth_pcd" / f"{stem}.ply",
-        "background": repo_root / "background" / f"{stem}_background.png",
-        "geometry_mask": repo_root / "background" / f"{stem}_geometry_mask.png",
-        "background_mask": repo_root / "background" / f"{stem}_background_mask.png",
-        "background_meta": repo_root / "background" / f"{stem}_background_meta.json",
+    return {
+        "device": device,
+        "moge": moge,
+        "ppd_model": ppd_model,
     }
 
-    if not outputs["mesh_ply"].exists():
-        raise FileNotFoundError(outputs["mesh_ply"])
-    if not outputs["camera"].exists():
-        raise FileNotFoundError(outputs["camera"])
-    if not outputs["geometry_mask"].exists():
-        raise FileNotFoundError(outputs["geometry_mask"])
 
-    return outputs
+def run_pixelperfect_one_inprocess(
+    *,
+    ppd_state: dict[str, Any],
+    image: Path,
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    """
+    In-process equivalent of run_point_cloud.py for one image.
 
+    Returns an in-memory mesh plus camera/background data. No root-level
+    depth_mesh/depth_pcd/background folders are written.
+    """
+    import cv2
+    import open3d as o3d
+    import torch
+    from ppd.utils.align_depth_func import recover_metric_depth_ransac
+    from ppd.utils.depth2pcd import depth2pcd
 
-def cleanup_pixelperfect_temp(repo_root: Path, stem: str) -> None:
-    for p in [
-        repo_root / "depth_mesh" / f"{stem}.ply",
-        repo_root / "depth_pcd" / f"{stem}.ply",
-        repo_root / "depth_pcd" / f"{stem}_camera.json",
-        repo_root / "background" / f"{stem}_background.png",
-        repo_root / "background" / f"{stem}_geometry_mask.png",
-        repo_root / "background" / f"{stem}_background_mask.png",
-        repo_root / "background" / f"{stem}_background_meta.json",
-        repo_root / "depth_vis" / f"{stem}.png",
-    ]:
-        safe_unlink(p)
+    device = ppd_state["device"]
+    ppd_model = ppd_state["ppd_model"]
+    moge = ppd_state["moge"]
+
+    image_bgr = cv2.imread(str(image))
+    if image_bgr is None:
+        raise FileNotFoundError(f"Could not read image: {image}")
+
+    print(f"[PPD] in-process depth/mesh: {image.name}")
+
+    with torch.inference_mode():
+        depth, resize_image = ppd_model.infer_image(image_bgr)
+        depth_np_rel = depth.squeeze().detach().cpu().numpy()
+
+        resize_H, resize_W = resize_image.shape[:2]
+        moge_image = cv2.cvtColor(resize_image, cv2.COLOR_BGR2RGB)
+        moge_tensor = torch.tensor(moge_image / 255.0, dtype=torch.float32, device=device).permute(2, 0, 1)
+        moge_depth, mask, intrinsic = moge.infer(moge_tensor)
+
+        if torch.any(mask):
+            moge_depth[~mask] = moge_depth[mask].max()
+        else:
+            raise RuntimeError(f"MoGe valid mask is empty for {image}")
+
+        metric_depth = recover_metric_depth_ransac(depth_np_rel, moge_depth, mask)
+
+        intrinsic = intrinsic.clone() if torch.is_tensor(intrinsic) else torch.tensor(intrinsic, device=device)
+        intrinsic[0, 0] *= resize_W
+        intrinsic[1, 1] *= resize_H
+        intrinsic[0, 2] *= resize_W
+        intrinsic[1, 2] *= resize_H
+
+    # Keep pointcloud creation optional-compatible but do not save it.
+    # Some upstream functions can force useful synchronization/validation.
+    _ = depth2pcd(
+        metric_depth,
+        intrinsic,
+        color=cv2.cvtColor(resize_image, cv2.COLOR_BGR2RGB),
+        input_mask=mask,
+        ret_pcd=True,
+    )
+
+    K_full = intrinsic.detach().cpu().numpy() if torch.is_tensor(intrinsic) else np.asarray(intrinsic)
+    depth_full = metric_depth.detach().cpu().numpy() if torch.is_tensor(metric_depth) else np.asarray(metric_depth)
+    mask_full = mask.detach().cpu().numpy() if torch.is_tensor(mask) else np.asarray(mask)
+    rgb_full = cv2.cvtColor(resize_image, cv2.COLOR_BGR2RGB)
+
+    base_mask = mask_full.astype(bool) & np.isfinite(depth_full) & (depth_full > 0)
+    valid_depths = depth_full[base_mask]
+
+    if valid_depths.size > 0:
+        bg_percentile = min(max(float(args.background_percentile), 0.0), 1.0)
+        adaptive_far = float(np.quantile(valid_depths, bg_percentile))
+        hard_cap = float(args.max_geometry_depth)
+        far_cut = min(hard_cap, adaptive_far) if hard_cap > 0 else adaptive_far
+    else:
+        adaptive_far = float("nan")
+        hard_cap = float(args.max_geometry_depth)
+        far_cut = hard_cap if hard_cap > 0 else float("inf")
+
+    geometry_mask_full = base_mask & (depth_full < far_cut)
+    background_mask_full = ~geometry_mask_full
+
+    print(
+        f"[PPD] far_cut={far_cut:.3f} percentile={float(args.background_percentile):.3f} "
+        f"geometry={int(geometry_mask_full.sum())}/{geometry_mask_full.size} "
+        f"({100.0 * geometry_mask_full.mean():.1f}%)"
+    )
+
+    background_rgb = rgb_full.copy()
+    background_rgb[geometry_mask_full] = 255
+
+    # Build decimated grid mesh, matching run_point_cloud.py behavior.
+    K_mesh = K_full.copy()
+    depth_mesh = depth_full
+    geometry_mask_mesh = geometry_mask_full
+    rgb_mesh = rgb_full
+
+    stride = max(1, int(args.mesh_stride))
+    if stride > 1:
+        depth_mesh = depth_mesh[::stride, ::stride]
+        geometry_mask_mesh = geometry_mask_mesh[::stride, ::stride]
+        rgb_mesh = rgb_mesh[::stride, ::stride]
+        K_mesh = K_mesh.copy()
+        K_mesh[0, 0] /= stride
+        K_mesh[1, 1] /= stride
+        K_mesh[0, 2] /= stride
+        K_mesh[1, 2] /= stride
+
+    Hm, Wm = depth_mesh.shape
+    fx, fy = K_mesh[0, 0], K_mesh[1, 1]
+    cx, cy = K_mesh[0, 2], K_mesh[1, 2]
+
+    ys, xs = np.meshgrid(np.arange(Hm), np.arange(Wm), indexing="ij")
+    z = depth_mesh.astype(np.float32)
+    x = (xs.astype(np.float32) - cx) * z / fx
+    y = (ys.astype(np.float32) - cy) * z / fy
+
+    verts = np.stack([x, y, z], axis=-1).reshape(-1, 3)
+    verts *= np.array([1, -1, -1], dtype=np.float32)
+    colors = rgb_mesh.reshape(-1, 3).astype(np.float64) / 255.0
+    valid = geometry_mask_mesh.astype(bool)
+
+    idx = np.arange(Hm * Wm, dtype=np.int32).reshape(Hm, Wm)
+    i00, i01 = idx[:-1, :-1], idx[:-1, 1:]
+    i10, i11 = idx[1:, :-1], idx[1:, 1:]
+
+    z00, z01 = depth_mesh[:-1, :-1], depth_mesh[:-1, 1:]
+    z10, z11 = depth_mesh[1:, :-1], depth_mesh[1:, 1:]
+    v00, v01 = valid[:-1, :-1], valid[:-1, 1:]
+    v10, v11 = valid[1:, :-1], valid[1:, 1:]
+
+    abs_jump = float(args.max_depth_jump)
+    rel_jump = float(args.relative_depth_jump)
+    local_z = np.maximum.reduce([z00, z01, z10, z11]).astype(np.float32)
+    threshold = np.maximum(abs_jump, rel_jump * local_z)
+
+    tri1_ok = (
+        v00 & v01 & v10
+        & (np.abs(z00 - z01) < threshold)
+        & (np.abs(z00 - z10) < threshold)
+        & (np.abs(z01 - z10) < threshold)
+    )
+    tri2_ok = (
+        v01 & v11 & v10
+        & (np.abs(z01 - z11) < threshold)
+        & (np.abs(z10 - z11) < threshold)
+        & (np.abs(z01 - z10) < threshold)
+    )
+
+    faces1 = np.stack([i00[tri1_ok], i10[tri1_ok], i01[tri1_ok]], axis=1)
+    faces2 = np.stack([i01[tri2_ok], i10[tri2_ok], i11[tri2_ok]], axis=1)
+    faces = np.concatenate([faces1, faces2], axis=0).astype(np.int32)
+
+    mesh = o3d.geometry.TriangleMesh()
+    mesh.vertices = o3d.utility.Vector3dVector(verts)
+    mesh.triangles = o3d.utility.Vector3iVector(faces)
+    mesh.vertex_colors = o3d.utility.Vector3dVector(colors)
+    mesh.remove_unreferenced_vertices()
+    mesh.remove_degenerate_triangles()
+    mesh.compute_vertex_normals()
+
+    print(f"[PPD] mesh: {len(mesh.vertices)} vertices, {len(mesh.triangles)} faces")
+
+    bg_meta = {
+        "resize_W": int(resize_W),
+        "resize_H": int(resize_H),
+        "background_percentile": float(args.background_percentile),
+        "max_geometry_depth": float(args.max_geometry_depth),
+        "adaptive_far_depth": None if not np.isfinite(adaptive_far) else float(adaptive_far),
+        "far_cut_depth": None if not np.isfinite(far_cut) else float(far_cut),
+        "geometry_pixel_ratio": float(geometry_mask_full.mean()),
+        "note": "geometry_mask=finite mesh region; background_mask=sky/far/non-geometry region for stage-2 compositing",
+    }
+
+    camera = {
+        "resize_W": int(resize_W),
+        "resize_H": int(resize_H),
+        "intrinsic": K_full.tolist(),
+        "saved_ply_flip": [1.0, -1.0, -1.0],
+        "max_geometry_depth": float(args.max_geometry_depth),
+        "background_percentile": float(args.background_percentile),
+        "background_files": {
+            "background_rgb": "background.png",
+            "geometry_mask": "geometry_mask.png",
+            "background_mask": "background_mask.png",
+            "meta": "background_meta.json",
+        },
+    }
+
+    # Release transient CUDA tensors, but keep both models resident.
+    del depth, moge_depth, mask, intrinsic, moge_tensor, metric_depth
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    return {
+        "mesh_o3d": mesh,
+        "camera": camera,
+        "background_rgb": background_rgb,
+        "geometry_mask": (geometry_mask_full.astype(np.uint8) * 255),
+        "background_mask": (background_mask_full.astype(np.uint8) * 255),
+        "background_meta": bg_meta,
+        "resize_rgb": rgb_full,
+    }
 
 
 # ---------------------------------------------------------------------
 # MVInverse in-process runner
+# ---------------------------------------------------------------------
 # ---------------------------------------------------------------------
 
 def load_mvinverse_once(repo_root: Path, ckpt: str, device: str):
@@ -337,69 +503,66 @@ def run_mvinverse_one(
 def build_temp_stage2_package(
     *,
     image: Path,
-    ppd: dict[str, Path],
+    ppd: dict[str, Any],
     maps: dict[str, Path],
     pkg_dir: Path,
 ) -> Path:
     """
     Create the only temporary package Mitsuba needs.
 
-    Required:
-      scene_uv.obj
-      camera.json
-      reference.png
-      geometry_mask.png
-      albedo.png
-      roughness.png
-      metallic.png
+    This fast version consumes the in-memory PixelPerfect result and writes
+    only the per-image Stage-2 handoff package. No persistent depth_mesh/
+    depth_pcd/background folders are needed.
     """
+    import open3d as o3d
     import trimesh
 
     stem = image.stem
     safe_rmtree(pkg_dir)
     pkg_dir.mkdir(parents=True, exist_ok=True)
 
-    # Copy camera/masks/reference/material maps.
-    shutil.copy2(ppd["camera"], pkg_dir / "camera.json")
+    # Camera / reference / masks / background.
+    (pkg_dir / "camera.json").write_text(json.dumps(ppd["camera"], indent=2), encoding="utf-8")
     Image.open(image).convert("RGB").save(pkg_dir / "reference.png")
+    Image.fromarray(ppd["geometry_mask"]).save(pkg_dir / "geometry_mask.png")
+    Image.fromarray(ppd["background_rgb"]).save(pkg_dir / "background.png")
+    Image.fromarray(ppd["background_mask"]).save(pkg_dir / "background_mask.png")
+    (pkg_dir / "background_meta.json").write_text(json.dumps(ppd["background_meta"], indent=2), encoding="utf-8")
 
-    shutil.copy2(ppd["geometry_mask"], pkg_dir / "geometry_mask.png")
-    if ppd.get("background") and ppd["background"].exists():
-        shutil.copy2(ppd["background"], pkg_dir / "background.png")
-    if ppd.get("background_mask") and ppd["background_mask"].exists():
-        shutil.copy2(ppd["background_mask"], pkg_dir / "background_mask.png")
-    if ppd.get("background_meta") and ppd["background_meta"].exists():
-        shutil.copy2(ppd["background_meta"], pkg_dir / "background_meta.json")
-
-    for key, src in maps.items():
+    for _key, src in maps.items():
         if src.exists():
             shutil.copy2(src, pkg_dir / src.name)
 
-    # Load mesh and project UVs from camera metadata.
-    mesh_obj = ppd["mesh_ply"]
-    scene_or_mesh = trimesh.load(str(mesh_obj), process=False)
-    if isinstance(scene_or_mesh, trimesh.Scene):
-        geoms = list(scene_or_mesh.geometry.values())
-        if not geoms:
-            raise RuntimeError(f"No geometry in {mesh_obj}")
-        mesh = trimesh.util.concatenate(geoms)
-    else:
-        mesh = scene_or_mesh
+    mesh_o3d = ppd["mesh_o3d"]
+    verts_saved = np.asarray(mesh_o3d.vertices, dtype=np.float32)
+    faces = np.asarray(mesh_o3d.triangles, dtype=np.int64)
+    if len(verts_saved) == 0 or len(faces) == 0:
+        raise RuntimeError(f"Empty mesh for {image}")
 
-    with open(ppd["camera"], "r", encoding="utf-8") as f:
-        meta = json.load(f)
+    try:
+        vc = np.asarray(mesh_o3d.vertex_colors)
+        if vc is not None and len(vc) == len(verts_saved):
+            vertex_colors = np.clip(vc * 255.0, 0, 255).astype(np.uint8)
+        else:
+            vertex_colors = None
+    except Exception:
+        vertex_colors = None
 
+    mesh = trimesh.Trimesh(
+        vertices=verts_saved,
+        faces=faces,
+        vertex_colors=vertex_colors,
+        process=False,
+    )
+
+    meta = ppd["camera"]
     K = np.asarray(meta["intrinsic"], dtype=np.float32)
     resize_W = int(meta["resize_W"])
     resize_H = int(meta["resize_H"])
     flip = np.asarray(meta.get("saved_ply_flip", [1.0, -1.0, -1.0]), dtype=np.float32)
 
-    verts_saved = np.asarray(mesh.vertices, dtype=np.float32)
     verts_cam = verts_saved / flip[None, :]
-
-    x = verts_cam[:, 0]
-    y = verts_cam[:, 1]
-    z = verts_cam[:, 2]
+    x, y, z = verts_cam[:, 0], verts_cam[:, 1], verts_cam[:, 2]
     valid = z > 1e-6
 
     u = K[0, 0] * x / z + K[0, 2]
@@ -418,20 +581,15 @@ def build_temp_stage2_package(
     uv[:, 0] = np.clip(u / max(1, resize_W - 1), 0.0, 1.0)
     uv[:, 1] = np.clip(1.0 - (v / max(1, resize_H - 1)), 0.0, 1.0)
 
-    # Better vertex colors and vertex normals for fallback/debug.
     albedo_path = pkg_dir / "albedo.png"
     if albedo_path.exists():
         alb = np.asarray(Image.open(albedo_path).convert("RGB").resize((resize_W, resize_H), Image.BILINEAR), dtype=np.uint8)
-        vc = np.zeros((len(verts_saved), 3), dtype=np.uint8)
-        vc[inside] = alb[py[inside], px[inside]]
-        try:
-            old_vc = np.asarray(mesh.visual.vertex_colors)
-            if old_vc is not None and len(old_vc) == len(verts_saved):
-                vc[~inside] = old_vc[~inside, :3]
-        except Exception:
-            pass
-        alpha = np.full((len(vc), 1), 255, dtype=np.uint8)
-        mesh.visual = trimesh.visual.ColorVisuals(mesh=mesh, vertex_colors=np.concatenate([vc, alpha], axis=1))
+        vc2 = np.zeros((len(verts_saved), 3), dtype=np.uint8)
+        vc2[inside] = alb[py[inside], px[inside]]
+        if vertex_colors is not None:
+            vc2[~inside] = vertex_colors[~inside, :3]
+        alpha = np.full((len(vc2), 1), 255, dtype=np.uint8)
+        mesh.visual = trimesh.visual.ColorVisuals(mesh=mesh, vertex_colors=np.concatenate([vc2, alpha], axis=1))
 
     normal_path = pkg_dir / "normal.png"
     if normal_path.exists():
@@ -474,17 +632,20 @@ def build_temp_stage2_package(
         )
         tex_mesh.export(str(pkg_dir / "scene_uv.obj"))
     else:
-        # Fallback: no UV texture, but Stage 2 can use PLY vertex color.
         mesh.export(str(pkg_dir / "scene.ply"))
 
-    # Always keep a PLY fallback in temp only. It is deleted after Stage 2.
+    # PLY fallback, still temporary and deleted after Stage 2.
     try:
-        mesh.export(str(pkg_dir / "scene.ply"))
+        # Open3D writes a clean PLY quickly and preserves vertex colors.
+        o3d.io.write_triangle_mesh(str(pkg_dir / "scene.ply"), mesh_o3d, write_vertex_colors=True)
     except Exception:
-        pass
+        try:
+            mesh.export(str(pkg_dir / "scene.ply"))
+        except Exception:
+            pass
 
     manifest = {
-        "schema": "stage12_temp_package_v1",
+        "schema": "stage12_temp_package_v2_inprocess_ppd",
         "name": stem,
         "temporary": True,
         "mesh": "scene_uv.obj" if (pkg_dir / "scene_uv.obj").exists() else "scene.ply",
@@ -506,6 +667,7 @@ def build_temp_stage2_package(
 
 # ---------------------------------------------------------------------
 # Stage 2 runner and final-output compaction
+# ---------------------------------------------------------------------
 # ---------------------------------------------------------------------
 
 def run_stage2(
@@ -736,6 +898,7 @@ def main() -> None:
     append_jsonl(progress_path, {"time": utc_now(), "event": "worker_start", "count": len(images)})
 
     mvi_mod, mvi_model = load_mvinverse_once(repo_root, args.mvi_ckpt, args.device)
+    ppd_state = load_pixelperfect_once(repo_root, args)
 
     ok = 0
     fail = 0
@@ -763,8 +926,8 @@ def main() -> None:
             safe_rmtree(current_dir)
             mkdirs(current_dir)
 
-            ppd_outputs = run_pixelperfect_for_image(repo_root=repo_root, image=image, args=args, log_path=log_path)
-
+            # Run MVInverse first while the input image is still the only large input.
+            # Then run PixelPerfect/MoGe in-process with its model already resident.
             maps = run_mvinverse_one(
                 mvi_mod=mvi_mod,
                 mvi_model=mvi_model,
@@ -773,11 +936,15 @@ def main() -> None:
                 out_dir=mvi_tmp,
             )
 
+            ppd_outputs = run_pixelperfect_one_inprocess(
+                ppd_state=ppd_state,
+                image=image,
+                args=args,
+            )
+
             build_temp_stage2_package(image=image, ppd=ppd_outputs, maps=maps, pkg_dir=pkg_dir)
 
             final_out = run_stage2(repo_root=repo_root, pkg_dir=pkg_dir, args=args, log_path=log_path)
-
-            cleanup_pixelperfect_temp(repo_root, stem)
             if not args.keep_temp:
                 safe_rmtree(current_dir)
 

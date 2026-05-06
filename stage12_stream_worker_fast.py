@@ -265,19 +265,26 @@ def run_pixelperfect_one_inprocess(
         moge_depth, mask, intrinsic = moge.infer(moge_tensor)
 
         # MoGe versions differ: some return torch tensors, others return NumPy arrays.
-        # Normalize to torch tensors here so the original run_point_cloud.py logic works.
-        moge_depth = torch.as_tensor(moge_depth, dtype=torch.float32, device=device)
-        mask = torch.as_tensor(mask, dtype=torch.bool, device=device)
-        intrinsic = torch.as_tensor(intrinsic, dtype=torch.float32, device=device)
+        # The downstream PPD utilities and mesh code use NumPy-style .astype(),
+        # so normalize MoGe outputs to NumPy arrays here.
+        def _to_numpy(x):
+            if torch.is_tensor(x):
+                return x.detach().cpu().numpy()
+            return np.asarray(x)
 
-        if torch.any(mask):
+        moge_depth = _to_numpy(moge_depth).astype(np.float32)
+        mask = _to_numpy(mask).astype(bool)
+        intrinsic = _to_numpy(intrinsic).astype(np.float32)
+
+        if np.any(mask):
             moge_depth[~mask] = moge_depth[mask].max()
         else:
             raise RuntimeError(f"MoGe valid mask is empty for {image}")
 
         metric_depth = recover_metric_depth_ransac(depth_np_rel, moge_depth, mask)
+        metric_depth = np.asarray(metric_depth, dtype=np.float32)
 
-        intrinsic = intrinsic.clone()
+        intrinsic = intrinsic.copy()
         intrinsic[0, 0] *= resize_W
         intrinsic[1, 1] *= resize_H
         intrinsic[0, 2] *= resize_W

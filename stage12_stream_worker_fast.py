@@ -264,6 +264,12 @@ def run_pixelperfect_one_inprocess(
         moge_tensor = torch.tensor(moge_image / 255.0, dtype=torch.float32, device=device).permute(2, 0, 1)
         moge_depth, mask, intrinsic = moge.infer(moge_tensor)
 
+        # MoGe versions differ: some return torch tensors, others return NumPy arrays.
+        # Normalize to torch tensors here so the original run_point_cloud.py logic works.
+        moge_depth = torch.as_tensor(moge_depth, dtype=torch.float32, device=device)
+        mask = torch.as_tensor(mask, dtype=torch.bool, device=device)
+        intrinsic = torch.as_tensor(intrinsic, dtype=torch.float32, device=device)
+
         if torch.any(mask):
             moge_depth[~mask] = moge_depth[mask].max()
         else:
@@ -271,7 +277,7 @@ def run_pixelperfect_one_inprocess(
 
         metric_depth = recover_metric_depth_ransac(depth_np_rel, moge_depth, mask)
 
-        intrinsic = intrinsic.clone() if torch.is_tensor(intrinsic) else torch.tensor(intrinsic, device=device)
+        intrinsic = intrinsic.clone()
         intrinsic[0, 0] *= resize_W
         intrinsic[1, 1] *= resize_H
         intrinsic[0, 2] *= resize_W

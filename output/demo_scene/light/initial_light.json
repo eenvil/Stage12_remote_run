@@ -1,0 +1,12 @@
+{
+  "type": "envmap_plus_point_grid",
+  "initial_envmap": "initial_envmap.exr",
+  "envmap_width": 16,
+  "envmap_height": 8,
+  "point_grid": [
+    4,
+    3,
+    1
+  ],
+  "point_init": 0.01
+}

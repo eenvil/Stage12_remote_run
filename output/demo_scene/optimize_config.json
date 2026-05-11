@@ -1,0 +1,55 @@
+{
+  "stage": "envmap_plus_point_grid",
+  "variant": "cuda_ad_rgb",
+  "spp": 32,
+  "final_spp": 128,
+  "iters": 80,
+  "lr": 0.08,
+  "optimized_parameters": [
+    "env_light.data",
+    "point_000.intensity.value",
+    "point_001.intensity.value",
+    "point_002.intensity.value",
+    "point_003.intensity.value",
+    "point_004.intensity.value",
+    "point_005.intensity.value",
+    "point_006.intensity.value",
+    "point_007.intensity.value",
+    "point_008.intensity.value",
+    "point_009.intensity.value",
+    "point_010.intensity.value",
+    "point_011.intensity.value"
+  ],
+  "target_env_rgb": [
+    0.1,
+    0.1,
+    0.1
+  ],
+  "target_point_position": [
+    -1.26,
+    -1.1,
+    1.2
+  ],
+  "target_point_rgb": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "material_mode": "auto",
+  "material_model": "principled",
+  "shape_type": "obj",
+  "shape_has_uv": true,
+  "use_uv_textures": true,
+  "requested_normal_mode": "auto",
+  "effective_normal_mode": "mesh_vertex_normals",
+  "use_vertex_color": false,
+  "material_reflectance_rgb": [
+    0.7123228311538696,
+    0.6750560998916626,
+    0.6011478900909424
+  ],
+  "roughness": 0.37254902720451355,
+  "metallic": 0.0941176488995552,
+  "backend_source": "stage1_scene_uv_obj",
+  "next_stage": "user_controllable_relighting"
+}

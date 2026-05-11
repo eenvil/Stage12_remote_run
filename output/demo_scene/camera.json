@@ -1,0 +1,34 @@
+{
+  "resize_W": 1088,
+  "resize_H": 720,
+  "intrinsic": [
+    [
+      577.4925537109375,
+      0.0,
+      544.0
+    ],
+    [
+      0.0,
+      577.4925537109375,
+      360.0
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "saved_ply_flip": [
+    1.0,
+    -1.0,
+    -1.0
+  ],
+  "max_geometry_depth": 100.0,
+  "background_percentile": 1.0,
+  "background_files": {
+    "background_rgb": "background.png",
+    "geometry_mask": "geometry_mask.png",
+    "background_mask": "background_mask.png",
+    "meta": "background_meta.json"
+  }
+}

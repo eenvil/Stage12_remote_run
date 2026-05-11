@@ -1,0 +1,199 @@
+{
+  "type": "target_environment_plus_point",
+  "radiance": [
+    0.1,
+    0.1,
+    0.1
+  ],
+  "point_light": {
+    "type": "point",
+    "position": [
+      -1.26,
+      -1.1,
+      1.2
+    ],
+    "intensity": {
+      "type": "rgb",
+      "value": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    }
+  },
+  "source_optimized_light": {
+    "type": "envmap_plus_point_grid",
+    "envmap": null,
+    "envmap_mitsuba_parameter": "env_light.data",
+    "point_lights": [
+      {
+        "id": 0,
+        "position": [
+          -6.136746263504028,
+          -2.108003079891205,
+          -0.40391709804534925
+        ],
+        "rgb_intensity": [
+          0.0,
+          0.07811722904443741,
+          0.12776242196559906
+        ],
+        "mitsuba_parameter": "point_000.intensity.value"
+      },
+      {
+        "id": 1,
+        "position": [
+          -2.758419624964396,
+          -2.108003079891205,
+          -0.40391709804534925
+        ],
+        "rgb_intensity": [
+          0.0,
+          0.0025704330764710903,
+          0.3366793096065521
+        ],
+        "mitsuba_parameter": "point_001.intensity.value"
+      },
+      {
+        "id": 2,
+        "position": [
+          0.6199070135752356,
+          -2.108003079891205,
+          -0.40391709804534925
+        ],
+        "rgb_intensity": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "mitsuba_parameter": "point_002.intensity.value"
+      },
+      {
+        "id": 3,
+        "position": [
+          3.9982336521148683,
+          -2.108003079891205,
+          -0.40391709804534925
+        ],
+        "rgb_intensity": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "mitsuba_parameter": "point_003.intensity.value"
+      },
+      {
+        "id": 4,
+        "position": [
+          -6.136746263504028,
+          -0.03395986557006836,
+          -0.40391709804534925
+        ],
+        "rgb_intensity": [
+          0.0,
+          0.018790481612086296,
+          0.068113774061203
+        ],
+        "mitsuba_parameter": "point_004.intensity.value"
+      },
+      {
+        "id": 5,
+        "position": [
+          -2.758419624964396,
+          -0.03395986557006836,
+          -0.40391709804534925
+        ],
+        "rgb_intensity": [
+          0.6520744562149048,
+          0.6680180430412292,
+          0.929365873336792
+        ],
+        "mitsuba_parameter": "point_005.intensity.value"
+      },
+      {
+        "id": 6,
+        "position": [
+          0.6199070135752356,
+          -0.03395986557006836,
+          -0.40391709804534925
+        ],
+        "rgb_intensity": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "mitsuba_parameter": "point_006.intensity.value"
+      },
+      {
+        "id": 7,
+        "position": [
+          3.9982336521148683,
+          -0.03395986557006836,
+          -0.40391709804534925
+        ],
+        "rgb_intensity": [
+          0.005302065052092075,
+          0.0,
+          0.0
+        ],
+        "mitsuba_parameter": "point_007.intensity.value"
+      },
+      {
+        "id": 8,
+        "position": [
+          -6.136746263504028,
+          2.040083348751068,
+          -0.40391709804534925
+        ],
+        "rgb_intensity": [
+          0.07719404995441437,
+          0.04863071069121361,
+          0.0
+        ],
+        "mitsuba_parameter": "point_008.intensity.value"
+      },
+      {
+        "id": 9,
+        "position": [
+          -2.758419624964396,
+          2.040083348751068,
+          -0.40391709804534925
+        ],
+        "rgb_intensity": [
+          0.20227059721946716,
+          0.08783257752656937,
+          0.0
+        ],
+        "mitsuba_parameter": "point_009.intensity.value"
+      },
+      {
+        "id": 10,
+        "position": [
+          0.6199070135752356,
+          2.040083348751068,
+          -0.40391709804534925
+        ],
+        "rgb_intensity": [
+          0.16386331617832184,
+          0.0,
+          0.0
+        ],
+        "mitsuba_parameter": "point_010.intensity.value"
+      },
+      {
+        "id": 11,
+        "position": [
+          3.9982336521148683,
+          2.040083348751068,
+          -0.40391709804534925
+        ],
+        "rgb_intensity": [
+          0.004167318809777498,
+          0.0,
+          0.004965995438396931
+        ],
+        "mitsuba_parameter": "point_011.intensity.value"
+      }
+    ]
+  }
+}

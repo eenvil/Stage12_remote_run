@@ -716,8 +716,15 @@ def run_stage2(
         "--point-layers", str(args.point_layers),
         "--point-init", str(args.point_init),
         "--light-reg", str(args.light_reg),
-        "--no-copy-input-assets",
     ]
+    if not args.keep_stage1_assets:
+        cmd.append("--no-copy-input-assets")
+    if args.target_env_rgb is not None:
+        cmd.extend(["--target-env-rgb", *map(str, args.target_env_rgb)])
+    if args.target_point_position is not None:
+        cmd.extend(["--target-point-position", *map(str, args.target_point_position)])
+    if args.target_point_rgb is not None:
+        cmd.extend(["--target-point-rgb", *map(str, args.target_point_rgb)])
 
     if args.overwrite:
         cmd.append("--overwrite")
@@ -847,6 +854,27 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--point-layers", type=int, default=1)
     p.add_argument("--point-init", type=float, default=0.01)
     p.add_argument("--light-reg", type=float, default=1e-4)
+    p.add_argument(
+        "--target-env-rgb",
+        type=float,
+        nargs=3,
+        default=None,
+        help="Optional target relight constant environment RGB passed to Stage 2 final render.",
+    )
+    p.add_argument(
+        "--target-point-position",
+        type=float,
+        nargs=3,
+        default=None,
+        help="Optional target relight point-light XYZ position in Stage 2 scene coordinates.",
+    )
+    p.add_argument(
+        "--target-point-rgb",
+        type=float,
+        nargs=3,
+        default=None,
+        help="Optional target relight point-light RGB intensity.",
+    )
 
     # Output policy.
     p.add_argument("--keep-temp", action="store_true", help="Keep work/current/<stem> after success.")

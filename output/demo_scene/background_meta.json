@@ -1,0 +1,10 @@
+{
+  "resize_W": 1088,
+  "resize_H": 720,
+  "background_percentile": 1.0,
+  "max_geometry_depth": 100.0,
+  "adaptive_far_depth": 4.978482246398926,
+  "far_cut_depth": 4.978482246398926,
+  "geometry_pixel_ratio": 0.9999987234477125,
+  "note": "geometry_mask=finite mesh region; background_mask=sky/far/non-geometry region for stage-2 compositing"
+}

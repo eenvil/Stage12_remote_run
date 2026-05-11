@@ -665,6 +665,27 @@ def main() -> None:
     parser.add_argument("--point-layers", type=int, default=1, help="Number of point-light depth layers.")
     parser.add_argument("--point-init", type=float, default=0.01, help="Initial point-light RGB intensity.")
     parser.add_argument("--light-reg", type=float, default=1e-4, help="Small L2 regularizer on light values.")
+    parser.add_argument(
+        "--target-env-rgb",
+        type=float,
+        nargs=3,
+        default=None,
+        help="Optional target relight constant environment RGB. When set, saved optimized render/composite use this light after original-light optimization.",
+    )
+    parser.add_argument(
+        "--target-point-position",
+        type=float,
+        nargs=3,
+        default=None,
+        help="Optional target relight point-light XYZ position in Stage 2 scene coordinates.",
+    )
+    parser.add_argument(
+        "--target-point-rgb",
+        type=float,
+        nargs=3,
+        default=None,
+        help="Optional target relight point-light RGB intensity.",
+    )
     parser.add_argument("--preview-light", type=float, nargs=3, default=[1.0, 1.0, 1.0], help="White/material preview constant environment RGB used for render_material_preview.png.")
     parser.add_argument("--save-debug-renders", action="store_true", help="Keep render_initial.png and render_material_preview.png. Disabled by default for production cleanup.")
     parser.add_argument("--save-exr", action="store_true", help="Keep render EXR files. Disabled by default because they are large; optimized_envmap.exr is still kept as a final light asset.")
@@ -946,25 +967,6 @@ def main() -> None:
                     print(f"iter {it:04d} | loss={loss_value:.6g} | light={light_rgb}")
                 log.append(summary)
 
-        final_img = mi.render(scene, params=params, spp=args.final_spp, seed=999)
-        mi.util.write_bitmap(str(out / "render_optimized.png"), final_img)
-        if args.save_exr:
-            mi.util.write_bitmap(str(out / "render_optimized.exr"), final_img)
-
-        final_np_linear = render_to_numpy(mi, dr, final_img)
-        final_srgb = linear_to_srgb(final_np_linear)
-        ref_srgb = read_rgb(ref_path, size=size, linear=False)
-        residual = np.abs(final_srgb - ref_srgb)
-        write_png_srgb(out / "residual.png", residual / max(1e-6, float(np.percentile(residual, 99))))
-
-        if bg_path.exists():
-            bg_srgb = read_rgb(bg_path, size=size, linear=False)
-            m = mask_np
-            composite = final_srgb * m + bg_srgb * (1.0 - m)
-            write_png_srgb(out / "composite_optimized.png", composite)
-        else:
-            shutil.copy2(out / "render_optimized.png", out / "composite_optimized.png")
-
         if args.light_mode == "envmap_points":
             optimized_envmap_name = None
             if env_key is not None:
@@ -1014,6 +1016,75 @@ def main() -> None:
         (out / "light" / "optimized_light.json").write_text(json.dumps(optimized_light, indent=2), encoding="utf-8")
         (out / "optimization_log.json").write_text(json.dumps(log, indent=2), encoding="utf-8")
 
+        render_light_model = optimized_light
+        if args.target_env_rgb is not None or args.target_point_position is not None:
+            # Stage 4 asks for a target relight buffer. The optimization above
+            # still estimates the source image lighting; this final pass swaps in
+            # user-requested target emitters.
+            target_env_rgb = list(args.target_env_rgb) if args.target_env_rgb is not None else [0.0, 0.0, 0.0]
+            target_scene_dict, _target_bsdf_meta = make_scene_dict(
+                mi=mi,
+                mesh_path=mesh_path,
+                shape_type=shape_type,
+                camera=camera,
+                spp=args.final_spp,
+                integrator="path",
+                init_rgb=target_env_rgb,
+                pkg=pkg,
+                reflectance_rgb=reflectance_rgb,
+                use_vertex_color=use_vertex_color,
+                use_uv_textures=use_uv_textures,
+                roughness=roughness,
+                metallic=metallic,
+                material_model=args.material_model,
+                normal_mode=args.normal_mode,
+                light_mode="constant",
+                envmap_path=None,
+                point_positions=None,
+                point_init=args.point_init,
+            )
+            target_point = None
+            if args.target_point_position is not None:
+                target_point_rgb = list(args.target_point_rgb) if args.target_point_rgb is not None else [10.0, 10.0, 10.0]
+                target_point = {
+                    "type": "point",
+                    "position": list(args.target_point_position),
+                    "intensity": {
+                        "type": "rgb",
+                        "value": target_point_rgb,
+                    },
+                }
+                target_scene_dict["target_point"] = target_point
+            target_scene = mi.load_dict(target_scene_dict)
+            final_img = mi.render(target_scene, spp=args.final_spp, seed=999)
+            render_light_model = {
+                "type": "target_environment_plus_point",
+                "radiance": target_env_rgb,
+                "point_light": target_point,
+                "source_optimized_light": optimized_light,
+            }
+            (out / "light" / "target_light.json").write_text(json.dumps(render_light_model, indent=2), encoding="utf-8")
+        else:
+            final_img = mi.render(scene, params=params, spp=args.final_spp, seed=999)
+
+        mi.util.write_bitmap(str(out / "render_optimized.png"), final_img)
+        if args.save_exr:
+            mi.util.write_bitmap(str(out / "render_optimized.exr"), final_img)
+
+        final_np_linear = render_to_numpy(mi, dr, final_img)
+        final_srgb = linear_to_srgb(final_np_linear)
+        ref_srgb = read_rgb(ref_path, size=size, linear=False)
+        residual = np.abs(final_srgb - ref_srgb)
+        write_png_srgb(out / "residual.png", residual / max(1e-6, float(np.percentile(residual, 99))))
+
+        if bg_path.exists():
+            bg_srgb = read_rgb(bg_path, size=size, linear=False)
+            m = mask_np
+            composite = final_srgb * m + bg_srgb * (1.0 - m)
+            write_png_srgb(out / "composite_optimized.png", composite)
+        else:
+            shutil.copy2(out / "render_optimized.png", out / "composite_optimized.png")
+
         render_backend_name = "scene_render_backend.obj" if mesh_path.suffix.lower() == ".obj" else "scene_render_backend.ply"
 
         scene_json = {
@@ -1041,7 +1112,7 @@ def main() -> None:
                     "metallic_fallback_scalar": metallic,
                 },
             },
-            "emitter": optimized_light,
+            "emitter": render_light_model,
         }
         (out / "scene_mitsuba.json").write_text(json.dumps(scene_json, indent=2), encoding="utf-8")
 
@@ -1053,6 +1124,9 @@ def main() -> None:
             "iters": args.iters,
             "lr": args.lr,
             "optimized_parameters": light_keys,
+            "target_env_rgb": list(args.target_env_rgb) if args.target_env_rgb is not None else None,
+            "target_point_position": list(args.target_point_position) if args.target_point_position is not None else None,
+            "target_point_rgb": list(args.target_point_rgb) if args.target_point_rgb is not None else None,
             "material_mode": args.material_mode,
             "material_model": args.material_model,
             "shape_type": shape_type,
@@ -1123,7 +1197,8 @@ def main() -> None:
                 "encoder": "encoder_pairs/",
                 "renderer": "renderer_pairs/",
             } if args.save_pairs else None,
-            "light_model": optimized_light,
+            "light_model": render_light_model,
+            "source_optimized_light_model": optimized_light if args.target_env_rgb is not None else None,
             "light_mode": args.light_mode,
             "preview_light": list(args.preview_light),
             "note": "Envmap + point-grid light reconstruction baseline. Preferred backend order: scene_uv.obj > scene.ply > scene.glb. If UV exists, Mitsuba uses bitmap albedo/roughness/metallic with a principled BSDF. normal.png is only used as a Mitsuba normal map when --normal-mode tangent_map is set, because Mitsuba expects tangent/local-space normals. debug renders and training-pair folders are optional; production default keeps only compact final outputs and deletes _work after success.",
